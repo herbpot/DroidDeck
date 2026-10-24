@@ -1624,6 +1624,7 @@ internal fun ProgressBarThin(fraction: Float, paused: Boolean = false, verify: B
 @Composable
 internal fun downloadLabel(d: com.droiddeck.launcher.stores.download.DownloadEntry): String = when (d.state) {
     DownloadState.PAUSED -> stringResource(R.string.stores_dl_paused)
+    DownloadState.RETRYING -> stringResource(R.string.stores_dl_auto_retry_short, d.retryCount, com.droiddeck.launcher.stores.download.DownloadRetryPolicy.MAX_RETRIES)
     DownloadState.QUEUED -> stringResource(R.string.stores_dl_queued)
     else -> if (d.stageFraction >= 0f) stringResource(R.string.stores_dl_active_percent, activeStageLabel(d), d.percent) else activeStageLabel(d)
 }

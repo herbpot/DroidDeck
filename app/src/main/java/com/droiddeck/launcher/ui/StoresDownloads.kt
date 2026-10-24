@@ -87,6 +87,7 @@ import com.droiddeck.launcher.stores.CatalogItem
 import com.droiddeck.launcher.stores.StoreLanguage
 import com.droiddeck.launcher.stores.StoresState
 import com.droiddeck.launcher.stores.download.DownloadEntry
+import com.droiddeck.launcher.stores.download.DownloadRetryPolicy
 import com.droiddeck.launcher.stores.download.DownloadQueue
 import com.droiddeck.launcher.stores.download.DownloadStage
 import com.droiddeck.launcher.stores.download.DownloadState
@@ -316,6 +317,13 @@ private fun DownloadCard(d: DownloadEntry, s: FrontEndState, a: FrontEndActions)
     val narrow = LocalNarrowPane.current
     val ink = Color.White
     val dim = Color.White.copy(alpha = 0.72f)
+    var retrySeconds by remember(d.key, d.retryAtMs) { mutableStateOf(((d.retryAtMs - System.currentTimeMillis() + 999L) / 1000L).coerceAtLeast(0L).toInt()) }
+    LaunchedEffect(d.key, d.retryAtMs) {
+        while (d.state == DownloadState.RETRYING && retrySeconds > 0) {
+            delay(1_000L)
+            retrySeconds = ((d.retryAtMs - System.currentTimeMillis() + 999L) / 1000L).coerceAtLeast(0L).toInt()
+        }
+    }
     Box(Modifier.fillMaxWidth().heightIn(min = 88.dp).clip(Shape12).background(Color(0xFF101318)).border(1.dp, pal.line, Shape12)) {
         if (!d.cover.isNullOrEmpty()) AsyncImage(model = d.cover, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.matchParentSize())
         else Spacer(Modifier.matchParentSize().background(artBrush(hueOf(d.name))))
@@ -339,6 +347,7 @@ private fun DownloadCard(d: DownloadEntry, s: FrontEndState, a: FrontEndActions)
                             else stringResource(R.string.stores_dl_failed)
                         }
                         DownloadState.PAUSED -> stringResource(R.string.stores_dl_paused)
+                        DownloadState.RETRYING -> stringResource(R.string.stores_dl_auto_retry, d.retryCount, DownloadRetryPolicy.MAX_RETRIES, retrySeconds)
                         DownloadState.QUEUED -> if (d.queuePosition > 0) stringResource(R.string.stores_dl_queued_at, d.queuePosition) else stringResource(R.string.stores_dl_queued)
                         DownloadState.RUNNING -> {
                             val head = downloadLabel(d)
@@ -359,7 +368,7 @@ private fun DownloadCard(d: DownloadEntry, s: FrontEndState, a: FrontEndActions)
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 when (d.state) {
-                    DownloadState.RUNNING, DownloadState.QUEUED -> {
+                    DownloadState.RUNNING, DownloadState.QUEUED, DownloadState.RETRYING -> {
                         RoundAction(Icons.Filled.Pause, stringResource(R.string.stores_dl_pause)) { DownloadQueue.pause(d.key) }
                         CancelAction { DownloadQueue.cancel(ctx, d.key) }
                     }

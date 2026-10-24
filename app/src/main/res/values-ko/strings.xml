@@ -2086,6 +2086,9 @@
     <string name="stores_kv_steam_on">설치 시 Steam에 추가됨(Deck UI + Steam Input)</string>
     <string name="stores_downloads_empty">다운로드 없음</string>
     <string name="stores_dl_paused">일시 중지됨</string>
+    <string name="stores_dl_auto_retry">자동 재시도 %1$d/%2$d · %3$d초 후</string>
+    <string name="stores_dl_auto_retry_short">자동 재시도 %1$d/%2$d</string>
+    <string name="stores_dl_auto_retry_note">자동 재시도</string>
     <string name="stores_dl_queued">대기 중</string>
     <string name="stores_dl_queued_at">대기 중 · #%1$d</string>
     <string name="stores_dl_cancelled">취소됨</string>

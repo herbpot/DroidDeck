@@ -58,7 +58,7 @@ class StoreDownloadService : Service() {
             ACTION_KEEP -> confirmKey = null
         }
         refresh()
-        if (active.isEmpty() && StoresState.latestDownloads.none { it.state == DownloadState.RUNNING }) stopNow()
+        if (active.isEmpty() && StoresState.latestDownloads.none { it.state == DownloadState.RUNNING } && !DownloadQueue.hasPendingRetries()) stopNow()
         return START_NOT_STICKY
     }
 
@@ -86,7 +86,7 @@ class StoreDownloadService : Service() {
             .setOngoing(true).setOnlyAlertOnce(true)
             .setContentIntent(openDownloads(this, 1))
         if (first == null) return b.setContentText(getString(R.string.stores_notification_waiting)).setProgress(0, 0, true).build()
-        b.setContentText(DownloadNotificationText.line(first, stageName(first.stage), getString(R.string.stores_dl_paused), getString(R.string.stores_dl_queued)))
+        b.setContentText(DownloadNotificationText.line(first, stageName(first.stage), getString(R.string.stores_dl_paused), getString(R.string.stores_dl_queued), getString(R.string.stores_dl_auto_retry_note)))
         val fraction = first.stageFraction
         if (fraction >= 0f) b.setProgress(1000, (fraction * 1000).toInt(), false) else b.setProgress(0, 0, true)
         val code = first.key.hashCode()
@@ -216,7 +216,7 @@ class StoreDownloadService : Service() {
         fun finish(context: Context, key: String) {
             active.remove(key)
             val inst = instance ?: return
-            if (active.isEmpty() && StoresState.latestDownloads.none { it.state == DownloadState.RUNNING }) inst.stopNow() else inst.refresh()
+            if (active.isEmpty() && StoresState.latestDownloads.none { it.state == DownloadState.RUNNING } && !DownloadQueue.hasPendingRetries()) inst.stopNow() else inst.refresh()
         }
 
         private fun pausedId(key: String) = ID + 0x20000 + (key.hashCode() and 0xFFFF)
@@ -255,11 +255,12 @@ class StoreDownloadService : Service() {
 }
 
 object DownloadNotificationText {
-    fun line(d: DownloadEntry, stageName: String, paused: String, queued: String): String {
+    fun line(d: DownloadEntry, stageName: String, paused: String, queued: String, retrying: String = "Auto retry"): String {
         val parts = ArrayList<String>()
         parts += d.name
         when {
             d.state == DownloadState.PAUSED -> parts += paused
+            d.state == DownloadState.RETRYING -> parts += "$retrying ${d.retryCount}/${DownloadRetryPolicy.MAX_RETRIES}"
             d.state == DownloadState.QUEUED -> parts += queued
             d.stage == DownloadStage.DOWNLOAD -> {
                 if (d.bytesTotal > 0) { parts += "${d.percent}%"; parts += "${formatBytes(d.bytesDone)}/${formatBytes(d.bytesTotal)}" }

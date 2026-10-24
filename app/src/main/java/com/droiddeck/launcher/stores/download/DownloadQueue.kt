@@ -1,6 +1,8 @@
 package com.droiddeck.launcher.stores.download
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.util.Log
 import com.droiddeck.launcher.session.SessionPrefs
 import com.droiddeck.launcher.stores.StoresState
@@ -97,8 +99,12 @@ object DownloadQueue {
     private val lock = Any()
     private val items = LinkedHashMap<String, Item>()
     private val heldPaused = HashSet<String>()
+    private val heldRetry = HashMap<String, Pair<Int, Long>>()
 
     fun holdPaused(key: String) = synchronized(lock) { heldPaused.add(key) }
+    fun holdRetry(key: String, count: Int, retryAtMs: Long) = synchronized(lock) {
+        heldRetry[key] = count.coerceIn(0, DownloadRetryPolicy.MAX_RETRIES) to retryAtMs
+    }
     private var running = 0
 
     fun parallel(context: Context): Int = SessionPrefs.gameStoresParallel(context)
@@ -123,17 +129,33 @@ object DownloadQueue {
 
     fun isActive(key: String): Boolean = entry(key)?.isActive == true
 
+    fun hasPendingRetries(): Boolean = synchronized(lock) {
+        items.values.any { it.entry.state == DownloadState.RETRYING }
+    }
+
     fun enqueue(context: Context, entry: DownloadEntry, factory: () -> DownloadJob) {
         val app = context.applicationContext
+        val newItem: Item
         synchronized(lock) {
             items[entry.key]?.let { if (it.entry.isActive) { Log.i(TAG, "${entry.key}: already queued"); return } }
             items.remove(entry.key)
-            val state = if (heldPaused.remove(entry.key)) DownloadState.PAUSED else DownloadState.QUEUED
-            items[entry.key] = Item(entry.copy(state = state, stage = DownloadStage.MANIFEST, startedAt = System.currentTimeMillis()), factory)
+            val restored = heldRetry.remove(entry.key)
+            val state = when {
+                heldPaused.remove(entry.key) -> DownloadState.PAUSED
+                restored != null && restored.first > 0 -> DownloadState.RETRYING
+                else -> DownloadState.QUEUED
+            }
+            newItem = Item(entry.copy(
+                state = state, stage = DownloadStage.MANIFEST, startedAt = System.currentTimeMillis(),
+                retryCount = restored?.first ?: 0,
+                retryAtMs = if (state == DownloadState.RETRYING) restored!!.second.coerceAtLeast(System.currentTimeMillis()) else 0L,
+            ), factory)
+            items[entry.key] = newItem
             renumber()
         }
         StoresState.logLine("${entry.store.label}: queued \"${entry.name}\"" + if (entry.bytesTotal > 0) " (${com.droiddeck.launcher.stores.formatBytes(entry.bytesTotal)})" else "")
         publish(app)
+        if (newItem.entry.state == DownloadState.RETRYING) scheduleRetry(app, newItem)
         advance(app)
     }
 
@@ -166,7 +188,7 @@ object DownloadQueue {
     fun pause(key: String) {
         val item = synchronized(lock) { items[key] } ?: return
         synchronized(lock) {
-            if (item.entry.state == DownloadState.QUEUED) { item.entry = item.entry.copy(state = DownloadState.PAUSED, queuePosition = 0); renumber(); publishLocked(); return }
+            if (item.entry.state == DownloadState.QUEUED || item.entry.state == DownloadState.RETRYING) { item.entry = item.entry.copy(state = DownloadState.PAUSED, retryAtMs = 0L, queuePosition = 0); renumber(); publishLocked(); return }
             if (item.entry.state != DownloadState.RUNNING) return
             item.pauseRequested = true
         }
@@ -185,7 +207,7 @@ object DownloadQueue {
             if (retry == null && item.factory == null) return
             items.remove(key)
             if (retry == null) {
-                items[key] = Item(item.entry.copy(state = DownloadState.QUEUED, speedBps = 0, etaSeconds = -1, error = null, startedAt = System.currentTimeMillis()), item.factory)
+                items[key] = Item(item.entry.copy(state = DownloadState.QUEUED, speedBps = 0, etaSeconds = -1, error = null, retryCount = 0, retryAtMs = 0L, startedAt = System.currentTimeMillis()), item.factory)
             }
             renumber()
             publishLocked()
@@ -226,7 +248,7 @@ object DownloadQueue {
     fun clear(context: Context, key: String) {
         val item = synchronized(lock) { items[key] } ?: return
         if (item.entry.state == DownloadState.RUNNING || item.entry.state == DownloadState.QUEUED) return
-        if (item.entry.state == DownloadState.FAILED || item.entry.state == DownloadState.PAUSED) {
+        if (item.entry.state == DownloadState.FAILED || item.entry.state == DownloadState.PAUSED || item.entry.state == DownloadState.RETRYING) {
             Thread({ runCatching { item.factory?.invoke()?.cancel(deleteFiles = true) } }, "store-dl-clear").start()
         }
         synchronized(lock) { items.remove(key); publishLocked() }
@@ -325,6 +347,14 @@ object DownloadQueue {
                 item.cancelled.get() && item.pauseRequested -> item.entry.copy(state = DownloadState.PAUSED, speedBps = 0, etaSeconds = -1)
                 item.cancelled.get() -> item.entry.copy(state = DownloadState.CANCELLED, finishedAt = now, speedBps = 0, etaSeconds = -1)
                 result != null -> item.entry.copy(state = DownloadState.INSTALLED, stage = DownloadStage.DONE, installPath = result, bytesDone = item.entry.bytesTotal, speedBps = 0, etaSeconds = -1, finishedAt = now)
+                DownloadRetryPolicy.shouldRetry(item.entry.stage, error) && item.entry.retryCount < DownloadRetryPolicy.MAX_RETRIES -> {
+                    val count = item.entry.retryCount + 1
+                    item.entry.copy(
+                        state = DownloadState.RETRYING, error = error, retryCount = count,
+                        retryAtMs = now + DownloadRetryPolicy.delayMs(count),
+                        speedBps = 0, etaSeconds = -1, queuePosition = 0,
+                    )
+                }
                 else -> item.entry.copy(state = DownloadState.FAILED, error = error, speedBps = 0, etaSeconds = -1, finishedAt = now)
             }
             item.job = null
@@ -344,9 +374,53 @@ object DownloadQueue {
                 StoreDownloadService.ended(context, item.entry, installed = false, gamesKey = null)
             }
             DownloadState.CANCELLED -> StoresState.notifyLibraryChanged(context)
+            DownloadState.RETRYING -> {
+                StoresState.logLine("${item.entry.store.label}: \"${item.entry.name}\" transient failure; retry ${item.entry.retryCount}/${DownloadRetryPolicy.MAX_RETRIES}")
+                scheduleRetry(context, item)
+            }
             else -> {}
         }
         StoreDownloadService.finish(context, item.entry.key)
         advance(context)
+    }
+
+    private fun networkReady(context: Context): Boolean = try {
+        val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val capabilities = cm.getNetworkCapabilities(cm.activeNetwork)
+        capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    } catch (_: Exception) {
+        true
+    }
+
+    private fun scheduleRetry(context: Context, item: Item) {
+        val key = item.entry.key
+        val wait = synchronized(lock) {
+            if (items[key] !== item || item.entry.state != DownloadState.RETRYING) return
+            (item.entry.retryAtMs - System.currentTimeMillis()).coerceAtLeast(0L)
+        }
+        main.postDelayed({
+            val connected = networkReady(context)
+            var shouldAdvance = false
+            var shouldWait = false
+            synchronized(lock) {
+                if (items[key] === item && item.entry.state == DownloadState.RETRYING) {
+                    if (!connected) {
+                        item.entry = item.entry.copy(retryAtMs = System.currentTimeMillis() + 15_000L)
+                        shouldWait = true
+                    } else {
+                        item.entry = item.entry.copy(
+                            state = DownloadState.QUEUED, stage = DownloadStage.MANIFEST,
+                            error = null, retryAtMs = 0L, detail = "", speedBps = 0, etaSeconds = -1,
+                            stageDone = 0L, stageTotal = 0L, stageItems = 0, stageItemsTotal = 0, stagesPassed = 0,
+                        )
+                        renumber()
+                        shouldAdvance = true
+                    }
+                    publishLocked()
+                }
+            }
+            if (shouldWait) scheduleRetry(context, item)
+            if (shouldAdvance) advance(context)
+        }, wait)
     }
 }

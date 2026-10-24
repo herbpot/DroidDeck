@@ -15,6 +15,7 @@ object SavedQueue {
     private const val FILE = "store-queue.json"
 
     private class Wanted(val item: CatalogItem, val root: File?)
+    private data class Restored(val item: CatalogItem, val root: File?, val paused: Boolean, val retryCount: Int, val retryAtMs: Long)
 
     private val wanted = HashMap<String, Wanted>()
     private val writer = Executors.newSingleThreadExecutor { r -> Thread(r, "store-queue-save") }
@@ -37,6 +38,8 @@ object SavedQueue {
         val out = JSONArray()
         for ((e, w) in rows) out.put(JSONObject().apply {
             put("paused", e.state == DownloadState.PAUSED)
+            put("retryCount", e.retryCount)
+            put("retryAtMs", if (e.state == DownloadState.RETRYING) e.retryAtMs else 0L)
             put("root", w.root?.absolutePath ?: "")
             put("item", itemJson(w.item))
         })
@@ -60,14 +63,16 @@ object SavedQueue {
             val back = (0 until rows.length()).mapNotNull { i ->
                 runCatching {
                     val o = rows.getJSONObject(i)
-                    Triple(itemOf(o.getJSONObject("item")), o.optString("root").takeIf { it.isNotEmpty() }?.let(::File), o.optBoolean("paused"))
+                    Restored(itemOf(o.getJSONObject("item")), o.optString("root").takeIf { it.isNotEmpty() }?.let(::File), o.optBoolean("paused"), o.optInt("retryCount", 0), o.optLong("retryAtMs", 0L))
                 }.getOrNull()
             }
             if (back.isEmpty()) return@Thread
             StoresState.post {
-                for ((item, root, paused) in back) {
+                for (restored in back) {
+                    val (item, root, paused, retryCount, retryAtMs) = restored
                     if (DownloadQueue.entry(key(item)) != null) continue
                     if (paused) DownloadQueue.holdPaused(key(item))
+                    if (retryCount > 0) DownloadQueue.holdRetry(key(item), retryCount, retryAtMs)
                     StoresState.install(app, item, root)
                 }
             }

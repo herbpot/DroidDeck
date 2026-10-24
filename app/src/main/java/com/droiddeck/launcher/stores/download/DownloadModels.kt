@@ -5,7 +5,7 @@ import com.droiddeck.launcher.stores.Store
 
 enum class DownloadStage { MANIFEST, DOWNLOAD, VERIFY, INSTALL, DONE }
 
-enum class DownloadState { QUEUED, RUNNING, PAUSED, INSTALLED, FAILED, CANCELLED }
+enum class DownloadState { QUEUED, RUNNING, RETRYING, PAUSED, INSTALLED, FAILED, CANCELLED }
 
 data class DownloadEntry(
     val store: Store,
@@ -31,11 +31,13 @@ data class DownloadEntry(
     val stageItemsTotal: Int = 0,
     val diskBytes: Long = 0L,
     val stagesPassed: Int = 0,
+    val retryCount: Int = 0,
+    val retryAtMs: Long = 0L,
 ) {
     fun passed(s: DownloadStage): Boolean = state == DownloadState.INSTALLED || (stagesPassed and (1 shl s.ordinal)) != 0
 
     val key: String get() = "${store.id}:$id"
-    val isActive: Boolean get() = state == DownloadState.QUEUED || state == DownloadState.RUNNING || state == DownloadState.PAUSED
+    val isActive: Boolean get() = state == DownloadState.QUEUED || state == DownloadState.RUNNING || state == DownloadState.RETRYING || state == DownloadState.PAUSED
     val stageFraction: Float get() = when {
         state == DownloadState.INSTALLED || stage == DownloadStage.DONE -> 1f
         stage == DownloadStage.DOWNLOAD -> if (bytesTotal > 0L) (bytesDone.toDouble() / bytesTotal).toFloat().coerceIn(0f, 1f) else -1f

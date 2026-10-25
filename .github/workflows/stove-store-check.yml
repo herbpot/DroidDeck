@@ -16,8 +16,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      - uses: android-actions/setup-android@v3
-      - name: Install Android platform
-        run: sdkmanager 'platforms;android-34' 'build-tools;35.0.0'
+      - name: Verify hosted Android SDK
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          test -f "${ANDROID_HOME}/platforms/android-34/android.jar"
+          test -x "${ANDROID_HOME}/build-tools/35.0.0/aapt2"
       - name: Unit tests and Kotlin/Android compilation
         run: ./gradlew -PskipRust=true :app:testDebugUnitTest --no-daemon --stacktrace

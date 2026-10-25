@@ -163,7 +163,7 @@ private const val DOWNLOADS = "downloads"
 
 private val TABS = listOf("library", "store")
 
-internal fun tabsFor(store: Store?): List<String> = if (store == Store.AMAZON) TABS.take(1) else TABS
+internal fun tabsFor(store: Store?): List<String> = if (store == Store.AMAZON || store == Store.STOVE) TABS.take(1) else TABS
 
 internal fun tabFor(store: Store?, tab: String): String = if (tab in tabsFor(store)) tab else "library"
 
@@ -257,7 +257,7 @@ internal fun StoresPage(s: FrontEndState, a: FrontEndActions, modifier: Modifier
     val shownTab = tabFor(store, tab)
     val pane = PaneKey(
         chip, if (store == null) "" else shownTab,
-        store == null || (StoresState.isSignedIn(store) && StoresState.expired[store] != true),
+        store == null || store == Store.STOVE || (StoresState.isSignedIn(store) && StoresState.expired[store] != true),
         store == null || StoresState.accountsLoaded,
     )
     val grids = remember { HashMap<PaneKey, LazyGridState>() }
@@ -475,6 +475,7 @@ internal fun StoresPage(s: FrontEndState, a: FrontEndActions, modifier: Modifier
                                 when {
                                     k.chip == DOWNLOADS -> Column(Modifier.fillMaxWidth().verticalScroll(scroll).padding(top = 4.dp, bottom = 16.dp)) { StoresDownloadsPane(s, a) }
                                     st == null -> {}
+                                    st == Store.STOVE -> StovePane(a)
                                     !k.accountsLoaded -> Box(Modifier.fillMaxWidth().padding(top = 16.dp)) {
                                         androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth().height(3.dp))
                                     }
@@ -675,7 +676,7 @@ private fun RowScope.ArrangeStoreChip(
         Motion.sp(0.6f, Spring.StiffnessMediumLow), label = "chipShift",
     )
     val pill = remember { RoundedCornerShape(99.dp) }
-    val signedIn = StoresState.isSignedIn(store) && StoresState.expired[store] != true
+    val signedIn = store == Store.STOVE || (StoresState.isSignedIn(store) && StoresState.expired[store] != true)
     fun reset() {
         drag.store = null
         drag.from = -1
@@ -750,7 +751,7 @@ private fun StoreChips(
                     val index = tabs.indexOfFirst { it.store == store }
                     key(store) { ArrangeStoreChip(tab, index, tabs.lastIndex, gapPx, drag, onFocusChip, onMoveTab, onToggleTab) }
                 } else if (tab.shown) {
-                    val signedIn = StoresState.isSignedIn(store) && StoresState.expired[store] != true
+                    val signedIn = store == Store.STOVE || (StoresState.isSignedIn(store) && StoresState.expired[store] != true)
                     key(store) {
                         StoreChip(
                             label = store.shortLabel, on = selected == store.id, under = fillShown && highlighted == store.id, key = store.id, mark = sourceColours(store.id).dot,
@@ -1221,6 +1222,7 @@ internal fun storePalette(base: Palette, store: Store?): Palette {
         Store.AMAZON -> Color(0xFFFF9900) to Color(0xFFE07800)
         Store.XBOX -> Color(0xFF70C850) to Color(0xFF107C10)
         Store.ITCH -> Color(0xFFFF5C5C) to Color(0xFFD93B3B)
+        Store.STOVE -> Color(0xFFFF784D) to Color(0xFFDA4B21)
         null -> return base
     }
     val on = if (accent.luminance() > 0.18f) Color(0xFF0B0B0D) else Color.White

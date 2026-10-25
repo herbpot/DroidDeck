@@ -1,0 +1,27 @@
+name: STOVE store checks
+on:
+  push:
+    branches:
+      - feature/stove-store-tab-20261025
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify hosted Android SDK
+        run: |
+          echo "ANDROID_HOME=${ANDROID_HOME}"
+          test -f "${ANDROID_HOME}/platforms/android-34/android.jar"
+          test -x "${ANDROID_HOME}/build-tools/35.0.0/aapt2"
+      - name: Unit tests and Kotlin/Android compilation
+        # Test-only: the app Gradle script requires release packs when GITHUB_ACTIONS=true.
+        # Do not pretend this is a release APK build.
+        run: GITHUB_ACTIONS=false ./gradlew -PskipRust=true :app:testDebugUnitTest --no-daemon --stacktrace

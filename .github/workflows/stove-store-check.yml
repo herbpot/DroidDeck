@@ -22,4 +22,6 @@ jobs:
           test -f "${ANDROID_HOME}/platforms/android-34/android.jar"
           test -x "${ANDROID_HOME}/build-tools/35.0.0/aapt2"
       - name: Unit tests and Kotlin/Android compilation
-        run: ./gradlew -PskipRust=true :app:testDebugUnitTest --no-daemon --stacktrace
+        # Test-only: the app Gradle script requires release packs when GITHUB_ACTIONS=true.
+        # Do not pretend this is a release APK build.
+        run: GITHUB_ACTIONS=false ./gradlew -PskipRust=true :app:testDebugUnitTest --no-daemon --stacktrace
